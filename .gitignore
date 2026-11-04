@@ -1,0 +1,19 @@
+.DS_Store
+.vscode/
+build/
+DerivedData
+xcuserdata
+node_modules/
+lib/
+coverage/
+.yarn/*
+!.yarn/releases
+npm-debug.log
+yarn-error.log
+
+# Local agent orchestration and planning notes (not part of the package)
+AGENTS.md
+orchestrator/
+docs/CONTRACTS.md
+docs/PLAN.md
+docs/tasks/

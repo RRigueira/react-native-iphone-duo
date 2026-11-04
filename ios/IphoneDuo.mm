@@ -1,0 +1,236 @@
+#import "IphoneDuo.h"
+
+#import "IDDuoReader.h"
+#import "IDRegionTrackerView.h"
+
+#import <React/RCTUtils.h>
+#import <UIKit/UIKit.h>
+
+using namespace facebook::react;
+
+@implementation IphoneDuo {
+  NSString *_hingeStatus;
+  double _hingeAngle;
+  NSDictionary *_lastState;
+  BOOL _emitScheduled;
+  __weak UIView *_observedView;
+  id _hingeInteraction;
+  id _traitRegistration;
+  IDRegionTrackerView *_regionTracker;
+}
+
+- (instancetype)init
+{
+  if (self = [super init]) {
+    _hingeStatus = @"unknown";
+    // A new scene can bring a new root view, so look again when one activates.
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(_sceneDidActivate)
+                                               name:UISceneDidActivateNotification
+                                             object:nil];
+  }
+  return self;
+}
+
+- (void)dealloc
+{
+  [NSNotificationCenter.defaultCenter removeObserver:self];
+  UIView *view = _observedView;
+  if (view != nil) {
+    [self _detachFrom:view];
+  }
+}
+
++ (NSString *)moduleName
+{
+  return @"IphoneDuo";
+}
+
+- (std::shared_ptr<TurboModule>)getTurboModule:(const ObjCTurboModule::InitParams &)params
+{
+  return std::make_shared<NativeIphoneDuoSpecJSI>(params);
+}
+
+- (NSDictionary *)getState
+{
+  __block NSDictionary *state = nil;
+  RCTUnsafeExecuteOnMainQueueSync(^{
+    [self _ensureObserving];
+    state = [self _computeState];
+    self->_lastState = state;
+  });
+  return state;
+}
+
+#pragma mark - Observation (main queue)
+
+- (NSDictionary *)_computeState
+{
+  return [IDDuoReader stateForView:_observedView ?: [IDDuoReader rootView]
+                       hingeStatus:_hingeStatus
+                        hingeAngle:_hingeAngle];
+}
+
+// UIKit documents these callbacks as main-queue, but the ivars below are also
+// read from `getState` on the main queue, so enforce it instead of assuming.
+- (void)_onMain:(dispatch_block_t)block
+{
+  if (NSThread.isMainThread) {
+    block();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), block);
+  }
+}
+
+- (void)_sceneDidActivate
+{
+  [self _onMain:^{
+    [self _ensureObserving];
+    [self _scheduleEmit];
+  }];
+}
+
+- (void)_emitIfChanged
+{
+  NSDictionary *state = [self _computeState];
+  if ([state isEqualToDictionary:_lastState]) {
+    return;
+  }
+  _lastState = state;
+  [self emitOnChange:state];
+}
+
+- (void)_scheduleEmit
+{
+  if (_emitScheduled) {
+    return;
+  }
+  _emitScheduled = YES;
+  // Coalesce bursts (fold, trait and bounds changes arrive together).
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self->_emitScheduled = NO;
+    [self _emitIfChanged];
+  });
+}
+
+- (void)_ensureObserving
+{
+  UIView *view = [IDDuoReader rootView];
+  if (view == _observedView) {
+    return;
+  }
+  if (view == nil) {
+    // No root view any more (scene teardown): stop observing a dead hierarchy.
+    UIView *stale = _observedView;
+    if (stale != nil) {
+      [self _detachFrom:stale];
+    }
+    return;
+  }
+  UIView *previous = _observedView;
+  if (previous != nil) {
+    [self _detachFrom:previous];
+  }
+  _observedView = view;
+
+#if ID_HAS_DUO_SDK
+  if (@available(iOS 27.1, *)) {
+    __weak __typeof(self) weakSelf = self;
+
+    UIHingeInteraction *hinge =
+        [[UIHingeInteraction alloc] initWithUpdateHandler:^(UIHingeInteraction *interaction, UIHingeInteractionUpdate *update) {
+          UIHinge *latest = update.hinge;
+          [weakSelf _onMain:^{
+            [weakSelf _applyHinge:latest];
+          }];
+        }];
+    [view addInteraction:hinge];
+    _hingeInteraction = hinge;
+
+    NSMutableArray<UITrait> *traits = [NSMutableArray arrayWithArray:UITraitCollection.systemTraitsAffectingVerticalBarEdge];
+    [traits addObject:UITraitHorizontalSizeClass.class];
+    [traits addObject:UITraitVerticalSizeClass.class];
+    _traitRegistration = [view registerForTraitChanges:traits
+                                           withHandler:^(__kindof id<UITraitEnvironment> environment, UITraitCollection *previousTraits) {
+                                             [weakSelf _onMain:^{
+                                               [weakSelf _scheduleEmit];
+                                             }];
+                                           }];
+
+    [view addObserver:self forKeyPath:@"bounds" options:0 context:nil];
+
+    IDRegionTrackerView *tracker = [IDRegionTrackerView new];
+    tracker.onRegionsChanged = ^{
+      [weakSelf _onMain:^{
+        [weakSelf _scheduleEmit];
+      }];
+    };
+    [tracker attachTo:view];
+    _regionTracker = tracker;
+  }
+#endif
+}
+
+- (void)_detachFrom:(UIView *)view
+{
+#if ID_HAS_DUO_SDK
+  if (@available(iOS 27.1, *)) {
+    if (_traitRegistration != nil) {
+      [view unregisterForTraitChanges:_traitRegistration];
+      _traitRegistration = nil;
+    }
+    if (_hingeInteraction != nil) {
+      [view removeInteraction:_hingeInteraction];
+      _hingeInteraction = nil;
+    }
+    [view removeObserver:self forKeyPath:@"bounds"];
+    [_regionTracker removeFromSuperview];
+    _regionTracker.onRegionsChanged = nil;
+    _regionTracker = nil;
+  }
+#endif
+  // The hinge belongs to the hierarchy being left; the next interaction reports
+  // the new one.
+  _hingeStatus = @"unknown";
+  _hingeAngle = 0;
+  _observedView = nil;
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary *)change
+                       context:(void *)context
+{
+  [self _onMain:^{
+    [self _scheduleEmit];
+  }];
+}
+
+#if ID_HAS_DUO_SDK
+- (void)_applyHinge:(UIHinge *)hinge API_AVAILABLE(ios(27.1))
+{
+  if (hinge == nil) {
+    _hingeStatus = @"unknown";
+    _hingeAngle = 0;
+  } else {
+    switch (hinge.status) {
+      case UIHingeStatusClosed:
+        _hingeStatus = @"closed";
+        break;
+      case UIHingeStatusPartiallyOpen:
+        _hingeStatus = @"partiallyOpen";
+        break;
+      case UIHingeStatusFullyOpen:
+        _hingeStatus = @"fullyOpen";
+        break;
+      default:
+        _hingeStatus = @"unknown";
+        break;
+    }
+    _hingeAngle = hinge.angle;
+  }
+  [self _scheduleEmit];
+}
+#endif
+
+@end
