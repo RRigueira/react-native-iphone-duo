@@ -32,13 +32,44 @@ using namespace facebook::react;
   return self;
 }
 
+// The module is released on the JS thread when the bridge reloads, but UIKit
+// only allows view and interaction changes on the main queue (removing a
+// UIHingeInteraction elsewhere trips a dispatch assert and kills the app). The
+// KVO observer has to go before `self` does; everything else is moved to the
+// main queue.
 - (void)dealloc
 {
   [NSNotificationCenter.defaultCenter removeObserver:self];
   UIView *view = _observedView;
-  if (view != nil) {
-    [self _detachFrom:view];
+  if (view == nil) {
+    return;
   }
+
+#if ID_HAS_DUO_SDK
+  if (@available(iOS 27.1, *)) {
+    [view removeObserver:self forKeyPath:@"bounds"];
+
+    id traitRegistration = _traitRegistration;
+    id hingeInteraction = _hingeInteraction;
+    IDRegionTrackerView *regionTracker = _regionTracker;
+    dispatch_block_t detach = ^{
+      if (traitRegistration != nil) {
+        [view unregisterForTraitChanges:traitRegistration];
+      }
+      if (hingeInteraction != nil) {
+        [view removeInteraction:hingeInteraction];
+      }
+      regionTracker.onRegionsChanged = nil;
+      [regionTracker removeFromSuperview];
+    };
+
+    if (NSThread.isMainThread) {
+      detach();
+    } else {
+      dispatch_async(dispatch_get_main_queue(), detach);
+    }
+  }
+#endif
 }
 
 + (NSString *)moduleName
