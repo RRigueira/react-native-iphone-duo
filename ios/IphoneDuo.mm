@@ -3,12 +3,34 @@
 #import "IDDuoReader.h"
 #import "IDRegionTrackerView.h"
 
+#import <React/RCTInvalidating.h>
 #import <React/RCTUtils.h>
 #import <UIKit/UIKit.h>
 
 using namespace facebook::react;
 
+#if ID_HAS_DUO_SDK
+// Main queue only. Clears the callback first so a late region pass can't fire
+// into the module being torn down.
+API_AVAILABLE(ios(27.1))
+static void _IDDetachUIKit(UIView *view, id traitRegistration, id hingeInteraction, IDRegionTrackerView *regionTracker)
+{
+  if (traitRegistration != nil) {
+    [view unregisterForTraitChanges:traitRegistration];
+  }
+  if (hingeInteraction != nil) {
+    [view removeInteraction:hingeInteraction];
+  }
+  regionTracker.onRegionsChanged = nil;
+  [regionTracker removeFromSuperview];
+}
+#endif
+
+@interface IphoneDuo () <RCTInvalidating>
+@end
+
 @implementation IphoneDuo {
+  BOOL _invalidated;
   NSString *_hingeStatus;
   double _hingeAngle;
   NSDictionary *_lastState;
@@ -32,37 +54,42 @@ using namespace facebook::react;
   return self;
 }
 
-// The module is released on the JS thread when the bridge reloads, but UIKit
-// only allows view and interaction changes on the main queue (removing a
-// UIHingeInteraction elsewhere trips a dispatch assert and kills the app). The
-// KVO observer has to go before `self` does; everything else is moved to the
-// main queue.
+// The bridge invalidates the module on its method queue when it reloads, but
+// UIKit only allows view and interaction changes on the main queue (removing a
+// UIHingeInteraction elsewhere trips a dispatch assert and kills the app).
+// Tearing down here rather than in `dealloc` lets the main-queue block keep
+// `self` alive, so no KVO or notification callback can reach a dying object.
+- (void)invalidate
+{
+  [NSNotificationCenter.defaultCenter removeObserver:self];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self->_invalidated = YES;
+    UIView *view = self->_observedView;
+    if (view != nil) {
+      [self _detachFrom:view];
+    }
+  });
+}
+
+// Fallback for a module released without `invalidate`: KVO does not retain its
+// observer, so it must be removed before `self` goes, even off the main queue.
 - (void)dealloc
 {
   [NSNotificationCenter.defaultCenter removeObserver:self];
-  UIView *view = _observedView;
-  if (view == nil) {
-    return;
-  }
-
 #if ID_HAS_DUO_SDK
   if (@available(iOS 27.1, *)) {
+    UIView *view = _observedView;
+    if (view == nil) {
+      return;
+    }
     [view removeObserver:self forKeyPath:@"bounds"];
 
     id traitRegistration = _traitRegistration;
     id hingeInteraction = _hingeInteraction;
     IDRegionTrackerView *regionTracker = _regionTracker;
     dispatch_block_t detach = ^{
-      if (traitRegistration != nil) {
-        [view unregisterForTraitChanges:traitRegistration];
-      }
-      if (hingeInteraction != nil) {
-        [view removeInteraction:hingeInteraction];
-      }
-      regionTracker.onRegionsChanged = nil;
-      [regionTracker removeFromSuperview];
+      _IDDetachUIKit(view, traitRegistration, hingeInteraction, regionTracker);
     };
-
     if (NSThread.isMainThread) {
       detach();
     } else {
@@ -146,6 +173,9 @@ using namespace facebook::react;
 
 - (void)_ensureObserving
 {
+  if (_invalidated) {
+    return;
+  }
   UIView *view = [IDDuoReader rootView];
   if (view == _observedView) {
     return;
@@ -206,17 +236,10 @@ using namespace facebook::react;
 {
 #if ID_HAS_DUO_SDK
   if (@available(iOS 27.1, *)) {
-    if (_traitRegistration != nil) {
-      [view unregisterForTraitChanges:_traitRegistration];
-      _traitRegistration = nil;
-    }
-    if (_hingeInteraction != nil) {
-      [view removeInteraction:_hingeInteraction];
-      _hingeInteraction = nil;
-    }
     [view removeObserver:self forKeyPath:@"bounds"];
-    [_regionTracker removeFromSuperview];
-    _regionTracker.onRegionsChanged = nil;
+    _IDDetachUIKit(view, _traitRegistration, _hingeInteraction, _regionTracker);
+    _traitRegistration = nil;
+    _hingeInteraction = nil;
     _regionTracker = nil;
   }
 #endif
