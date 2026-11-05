@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.1](https://github.com/RRigueira/react-native-iphone-duo/compare/v0.1.0...v0.1.1) (2026-11-05)
+
+### Bug Fixes
+
+* tear down hinge observation from invalidate on the main queue ([#3](https://github.com/RRigueira/react-native-iphone-duo/issues/3)) ([37233dd](https://github.com/RRigueira/react-native-iphone-duo/commit/37233dd775fcb19014b4dc26532477dbe898663e))
+
 # 0.1.0 (2026-11-05)
 
 ### Features

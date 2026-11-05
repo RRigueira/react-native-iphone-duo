@@ -1,6 +1,6 @@
 {
   "name": "react-native-iphone-duo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "iPhone Duo support for React Native: vertical bar edge, reserved regions (fold, cameras) and hinge state, with safe fallbacks on every other device",
   "main": "./lib/module/index.js",
   "react-native": "./src/index.tsx",
