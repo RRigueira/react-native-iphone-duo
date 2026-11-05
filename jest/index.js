@@ -17,6 +17,7 @@ const DEFAULT_STATE = {
   hingeStatus: 'unknown',
   hingeAngle: 0,
   regions: [],
+  foldOrientation: null,
 };
 
 let _state = DEFAULT_STATE;
@@ -49,16 +50,31 @@ function useVerticalBarSide() {
   return verticalBarEdge === 'trailing' ? 'right' : null;
 }
 
-function useFoldRegion() {
-  const { regions, hingeStatus } = useIphoneDuo();
+function getFoldOrientation(region) {
+  return region.frame.width > region.frame.height ? 'horizontal' : 'vertical';
+}
+
+function _activeFold(regions, hingeStatus) {
   if (hingeStatus !== 'partiallyOpen') {
     return null;
   }
   return regions.find((r) => r.kind === 'division' && r.active) ?? null;
 }
 
+function useFoldRegion() {
+  const { regions, hingeStatus } = useIphoneDuo();
+  return _activeFold(regions, hingeStatus);
+}
+
+// Like the real module, the fold orientation follows the regions and hinge
+// unless a test sets it explicitly.
 function __setState(partial) {
-  _state = { ..._state, ...partial };
+  const next = { ..._state, ...partial };
+  if (!('foldOrientation' in partial)) {
+    const fold = _activeFold(next.regions, next.hingeStatus);
+    next.foldOrientation = fold ? getFoldOrientation(fold) : null;
+  }
+  _state = next;
   _notify();
 }
 
@@ -75,6 +91,7 @@ module.exports = {
   useIphoneDuo,
   useVerticalBarSide,
   useFoldRegion,
+  getFoldOrientation,
   __setState,
   __reset,
 };

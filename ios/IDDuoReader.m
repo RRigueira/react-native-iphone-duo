@@ -2,21 +2,50 @@
 
 @implementation IDDuoReader
 
+// With several windows or scenes (iPad windows, Split View) the first key window
+// is not necessarily the one the user is looking at. Prefer the foreground-active
+// scene, then a foreground-inactive one, then anything that has a window.
 + (UIView *)rootView
 {
-  UIWindow *fallback = nil;
+  NSArray<NSNumber *> *preferredStates = @[
+    @(UISceneActivationStateForegroundActive),
+    @(UISceneActivationStateForegroundInactive),
+  ];
+
+  for (NSNumber *state in preferredStates) {
+    UIWindow *window = [self windowInScenesWithState:state.integerValue];
+    if (window != nil) {
+      return window.rootViewController.view ?: window;
+    }
+  }
+
+  UIWindow *fallback = [self windowInScenesWithState:NSNotFound];
+  return fallback.rootViewController.view ?: fallback;
+}
+
+// The key window, or else the first window, of the first window scene in
+// `state`. NSNotFound matches any scene.
++ (UIWindow *)windowInScenesWithState:(NSInteger)state
+{
   for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
     if (![scene isKindOfClass:UIWindowScene.class]) {
       continue;
     }
+    if (state != NSNotFound && scene.activationState != state) {
+      continue;
+    }
+    UIWindow *first = nil;
     for (UIWindow *window in ((UIWindowScene *)scene).windows) {
       if (window.isKeyWindow) {
-        return window.rootViewController.view ?: window;
+        return window;
       }
-      fallback = fallback ?: window;
+      first = first ?: window;
+    }
+    if (first != nil) {
+      return first;
     }
   }
-  return fallback.rootViewController.view ?: fallback;
+  return nil;
 }
 
 + (NSDictionary *)stateForView:(UIView *)view hingeStatus:(NSString *)hingeStatus hingeAngle:(double)hingeAngle

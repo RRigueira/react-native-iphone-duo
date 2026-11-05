@@ -261,3 +261,56 @@ describe('_reset', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe('fold orientation', () => {
+  const frameOf = (width: number, height: number) => ({
+    kind: 'division' as const,
+    frame: { x: 0, y: 0, width, height },
+    margins: { top: 0, left: 0, bottom: 0, right: 0 },
+    active: true,
+  });
+
+  it('getFoldOrientation reads the long side of the frame', () => {
+    const { duo } = _load(null);
+    expect(duo.getFoldOrientation(frameOf(40, 669))).toBe('vertical');
+    expect(duo.getFoldOrientation(frameOf(669, 40))).toBe('horizontal');
+    // A square frame has no long side: treated as vertical.
+    expect(duo.getFoldOrientation(frameOf(40, 40))).toBe('vertical');
+  });
+
+  it('is vertical for the active fold of a book-style pose', () => {
+    const { duo } = _load({ getState: () => RAW, onChange: jest.fn() });
+    expect(duo.getState().foldOrientation).toBe('vertical');
+  });
+
+  it('is horizontal for a wide, short fold region', () => {
+    const wide = {
+      ...RAW,
+      regions: RAW.regions.map((r) =>
+        r.kind === 'division' ? { ...r, width: 669, height: 40 } : r
+      ),
+    };
+    const { duo } = _load({ getState: () => wide, onChange: jest.fn() });
+    expect(duo.getState().foldOrientation).toBe('horizontal');
+  });
+
+  it('is null when the hinge is fully open, even if the region is stale', () => {
+    const stale = { ...RAW, hingeStatus: 'fullyOpen' };
+    const { duo } = _load({ getState: () => stale, onChange: jest.fn() });
+    expect(duo.getState().foldOrientation).toBeNull();
+  });
+
+  it('is null when the fold region is inactive', () => {
+    const inactive = {
+      ...RAW,
+      regions: RAW.regions.map((r) => ({ ...r, active: false })),
+    };
+    const { duo } = _load({ getState: () => inactive, onChange: jest.fn() });
+    expect(duo.getState().foldOrientation).toBeNull();
+  });
+
+  it('is null without the native module', () => {
+    const { duo } = _load(null);
+    expect(duo.getState().foldOrientation).toBeNull();
+  });
+});

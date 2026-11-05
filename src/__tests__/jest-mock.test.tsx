@@ -101,3 +101,42 @@ describe('jest mock (react-native-iphone-duo/jest)', () => {
     expect(region).toEqual(fold);
   });
 });
+
+describe('jest mock fold orientation', () => {
+  const fold = (width: number, height: number) => ({
+    kind: 'division' as const,
+    frame: { x: 0, y: 0, width, height },
+    margins: { top: 0, left: 0, bottom: 0, right: 0 },
+    active: true,
+  });
+
+  beforeEach(() => mock.__reset());
+
+  it('derives the orientation from the regions and hinge', () => {
+    mock.__setState({
+      hingeStatus: 'partiallyOpen',
+      regions: [fold(40, 669)],
+    });
+    expect(mock.getState().foldOrientation).toBe('vertical');
+
+    mock.__setState({ regions: [fold(669, 40)] });
+    expect(mock.getState().foldOrientation).toBe('horizontal');
+
+    mock.__setState({ hingeStatus: 'fullyOpen' });
+    expect(mock.getState().foldOrientation).toBeNull();
+  });
+
+  it('lets a test set the orientation explicitly', () => {
+    mock.__setState({ foldOrientation: 'horizontal' });
+    expect(mock.getState().foldOrientation).toBe('horizontal');
+  });
+
+  it('getFoldOrientation matches the real module', () => {
+    expect(mock.getFoldOrientation(fold(40, 669))).toBe(
+      real.getFoldOrientation(fold(40, 669))
+    );
+    expect(mock.getFoldOrientation(fold(669, 40))).toBe(
+      real.getFoldOrientation(fold(669, 40))
+    );
+  });
+});

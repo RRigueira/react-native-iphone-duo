@@ -17,6 +17,7 @@ iPhone Duo signals for React Native: which side the system puts its bars on, whe
 | Side the system puts its bars on | `UITraitCollection.verticalBarEdge` | `verticalBarEdge`, `useVerticalBarSide()` |
 | Fold and camera regions | `UIView.reservedRegions(kind:)` | `regions`, `useFoldRegion()` |
 | Hinge posture and angle | `UIHingeInteraction` | `hingeStatus`, `hingeAngle` |
+| Which way the fold runs | derived from the fold region's frame | `foldOrientation`, `getFoldOrientation()` |
 
 On Android, on iOS below 27.1 and on iPhones that do not fold, the module returns inert defaults (`isSupported: false`, `verticalBarEdge: 'unspecified'`, `hingeStatus: 'unknown'`, no regions). It never throws.
 
@@ -57,7 +58,8 @@ function Layout() {
   // Present only while the device is partially open.
   const fold = useFoldRegion();
 
-  const { hingeStatus, hingeAngle, regions } = useIphoneDuo();
+  const { hingeStatus, hingeAngle, regions, foldOrientation } = useIphoneDuo();
+  // foldOrientation: 'vertical' | 'horizontal' | null
   // ...
 }
 ```
@@ -65,7 +67,7 @@ function Layout() {
 Typical uses:
 
 - **Put your own bar where the system puts its bars.** Use `useVerticalBarSide()` for the side. The system reserves a strip along that edge for its status area and cameras, so start your bar below the lowest active `occlusion` region that overlaps the strip.
-- **Keep a floating control off the fold.** While `useFoldRegion()` returns a region, clamp the control to one side of `region.frame`.
+- **Keep a floating control off the fold.** While `useFoldRegion()` returns a region, clamp the control to one side of `region.frame`. `foldOrientation` tells you whether that means left/right (`'vertical'`) or above/below (`'horizontal'`).
 - **Know when the device is a foldable.** `hingeStatus !== 'unknown'`, or `regions.length > 0`. `isSupported` only says the OS has the APIs.
 
 ## API reference
@@ -76,6 +78,7 @@ subscribe(listener): () => void            // notified when the snapshot changes
 useIphoneDuo(): DuoState                   // the snapshot as a hook
 useVerticalBarSide(): 'left' | 'right' | null
 useFoldRegion(): ReservedRegion | null     // the active fold region, or null
+getFoldOrientation(region): 'vertical' | 'horizontal'
 DEFAULT_STATE: DuoState                    // the inert value used when unsupported
 ```
 
@@ -86,6 +89,7 @@ type DuoState = {
   hingeStatus: 'unknown' | 'closed' | 'partiallyOpen' | 'fullyOpen';
   hingeAngle: number;                      // degrees, 0 closed to 180 flat; 0 when unknown
   regions: ReservedRegion[];
+  foldOrientation: 'vertical' | 'horizontal' | null;  // null: no active fold
 };
 
 type ReservedRegion = {
@@ -102,6 +106,7 @@ Details that are easy to get wrong:
 - **Angle.** `UIHinge.angle` is radians natively; the library converts it to degrees.
 - **Inactive regions are included.** The inner camera region is inactive until a camera is in use, and the fold region is inactive when the device is flat. Filter on `active`, or use `useFoldRegion()`.
 - **`useFoldRegion()` also requires a partially open hinge**, because UIKit can leave the fold flagged active for a moment after the hinge opens fully.
+- **Fold orientation.** A tall, narrow fold frame splits the display left and right (`'vertical'`, held like a book); a wide, short one splits it top and bottom (`'horizontal'`, held like a laptop). `foldOrientation` is `null` unless the hinge is partially open and the fold region is active.
 - **`leading` / `trailing`** map to `left` / `right` in left-to-right layouts. Right-to-left is not verified (see Known gaps).
 - **Lazy start.** The native observer starts on the first `getState()` or `subscribe()` call, which the hooks make for you.
 - **Stable snapshot.** The same object is returned until the native side emits a change, so the hooks do not re-render needlessly.
@@ -127,11 +132,47 @@ it('puts the bar on the right', () => {
 
 `__setState(partial)` merges into the state and notifies subscribers; `__reset()` restores `DEFAULT_STATE`.
 
+## How this compares to similar packages
+
+Several packages cover parts of the same ground. The table is based on each package's docs and npm metadata as of November 2026 and may be out of date; check their docs before choosing. "No" means the signal is not documented, not that it is impossible.
+
+| | **react-native-iphone-duo** (this) | [`react-native-nitro-hinge`](https://www.npmjs.com/package/react-native-nitro-hinge) | [`expo-hinge`](https://docs.expo.dev/versions/latest/sdk/hinge/) | [`react-native-reserved-regions`](https://github.com/appandflow/react-native-reserved-regions) | [`@logicwind/react-native-fold-detection`](https://www.npmjs.com/package/@logicwind/react-native-fold-detection) | [`react-native-dualscreeninfo`](https://www.npmjs.com/package/react-native-dualscreeninfo) |
+|---|---|---|---|---|---|---|
+| Platforms | iOS 27.1+ (inert elsewhere) | iOS, iPadOS, Android | iOS 27.1+, Android 11+ | iOS 27.1+, Android 7+ (fold features need Jetpack WindowManager) | Android | Android (Surface Duo) |
+| Hinge angle / posture | Yes | Yes | Yes (Android never reports `closed`) | No | Posture flags (tabletop, book, flat) | Spanning flag only |
+| Fold region (`division`) | Yes, with active flag and orientation | Yes | No | Yes | Fold bounds on Android | Hinge component |
+| Camera / status regions (`occlusion`) | Yes, with `active` and margins | No | No | Yes (frame only) | No | No |
+| `verticalBarEdge` (side of the system bars) | **Yes** | No | No | No | No | No |
+| Size classes, insets, font scale | No | Yes | No | No | No | No |
+| Reanimated / UI-thread updates | No | No | Yes | No | No | No |
+| Native layer | TurboModule | Nitro | Expo module | Fabric view | Native module | Native module |
+| Jest mock | Yes (`/jest`) | Not checked | Not checked | Not checked | Not checked | Not checked |
+| Last npm release seen | Not yet published | Nov 2026 | Oct 2026 | Sep 2026 | Aug 2025 | Sep 2026 |
+
+Other options: Microsoft's dual-screen packages were Surface Duo only and `react-native-dual-screen` is deprecated on npm.
+
+Use **this package** when you need to place your own UI where the Duo's system bars and cameras are: starting a side bar below the status area, ending it above a camera, or following the system's bar side. It is the only one here that exposes `verticalBarEdge`. Use **nitro-hinge** for one API across iOS and Android foldables, size classes and insets; **expo-hinge** for just the hinge angle with Reanimated support in an Expo app; **react-native-reserved-regions** for reserved regions on both iOS and Android through a provider view. They combine well, since this package does not replace any of that:
+
+```tsx
+import { useHinge } from 'react-native-nitro-hinge';
+import { useVerticalBarSide, useFoldRegion } from 'react-native-iphone-duo';
+
+function Shell() {
+  const { widthClass } = useHinge();      // cross-platform size class
+  const barSide = useVerticalBarSide();   // where the Duo puts its bars
+  const fold = useFoldRegion();           // where the fold is, while it is open
+  // ...
+}
+```
+
+The fold orientation helper and the choice of the foreground-active scene were influenced by how nitro-hinge handles the same problems.
+
 ## Platform notes
 
 ### iOS
 
 - The native module reads the signals from the app's root view. A transparent, non-interactive tracker view reads the reserved regions inside `updateConstraints`, which is the mechanism UIKit documents for re-running layout when a region changes. That covers the fold, the inner camera and the Dynamic Island growing for a Live Activity.
+- The module reads the foreground-active scene's key window, falling back to a foreground-inactive scene and then to any window, so extra windows or scenes do not pick the wrong root view.
 - Callbacks are delivered on the main queue and coalesced, since one fold gesture can produce dozens of native events.
 - Measured on the iPhone Duo simulator (Xcode 27.2, iOS 27.2): the bar edge was `trailing` on the cover display and on the inner display in landscape, and `unspecified` on the inner display in portrait. The side safe-area inset was 84 pt on the bar edge. Treat these as observations, not guarantees: Apple has not published point sizes, so read the window and regions at runtime.
 
